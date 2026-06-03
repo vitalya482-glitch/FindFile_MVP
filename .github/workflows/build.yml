@@ -1,4 +1,3 @@
-
 name: Build FindFile
 
 on:
@@ -35,55 +34,52 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller
+          pip install -r requirements.txt
+          pip install pyinstaller
 
       - name: Build application
         run: |
-          pyinstaller --onedir --windowed --name FindFile app.py
+          pyinstaller --onedir --windowed --name FindFile --contents-directory runtime app.py
 
-      - name: Prepare release structure
+      - name: Prepare data folder
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path release/FindFile/runtime
-          New-Item -ItemType Directory -Force -Path release/FindFile/data
+          New-Item -ItemType Directory -Force -Path "dist/FindFile/data"
 
-          Copy-Item dist/FindFile/FindFile.exe release/FindFile/FindFile.exe
-
-          Copy-Item dist/FindFile/_internal/* release/FindFile/runtime/ -Recurse -Force
-
-          if (Test-Path file_index.db) {
-            Copy-Item file_index.db release/FindFile/data/file_index.db
+          if (Test-Path "file_index.db") {
+            Copy-Item "file_index.db" "dist/FindFile/data/file_index.db" -Force
           }
 
-          if (Test-Path settings.json) {
-            Copy-Item settings.json release/FindFile/data/settings.json
+          if (Test-Path "settings.json") {
+            Copy-Item "settings.json" "dist/FindFile/data/settings.json" -Force
+          } else {
+            "{}" | Out-File -FilePath "dist/FindFile/data/settings.json" -Encoding utf8
           }
 
       - name: Upload FULL package
-        if: ${{ github.event.inputs.package == 'full' || github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' || github.event.inputs.package == 'full' }}
         uses: actions/upload-artifact@v4
         with:
           name: FindFile_FULL
-          path: release/FindFile
+          path: dist/FindFile
 
       - name: Upload APP only
         if: ${{ github.event.inputs.package == 'app' }}
         uses: actions/upload-artifact@v4
         with:
           name: FindFile_APP_ONLY
-          path: release/FindFile/FindFile.exe
+          path: dist/FindFile/FindFile.exe
 
       - name: Upload RUNTIME only
         if: ${{ github.event.inputs.package == 'runtime' }}
         uses: actions/upload-artifact@v4
         with:
           name: FindFile_RUNTIME
-          path: release/FindFile/runtime
+          path: dist/FindFile/runtime
 
       - name: Upload DATA only
         if: ${{ github.event.inputs.package == 'data' }}
         uses: actions/upload-artifact@v4
         with:
           name: FindFile_DATA
-          path: release/FindFile/data
-```
+          path: dist/FindFile/data
