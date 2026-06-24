@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- WinExe означает Windows-приложение без консольного окна. -->
+    <OutputType>WinExe</OutputType>
+
+    <!-- WPF работает только на Windows, поэтому target framework windows-specific. -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+
+    <!-- Включает XAML/WPF. -->
+    <UseWPF>true</UseWPF>
+
+    <!-- Имя итогового exe. -->
+    <AssemblyName>FindFile</AssemblyName>
+    <RootNamespace>FindFile.Desktop</RootNamespace>
+
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

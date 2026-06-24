@@ -1,0 +1,12 @@
+<UserControl x:Class="FindFile.Desktop.Views.ResultsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="26">
+        <Border Style="{StaticResource CardStyle}" VerticalAlignment="Top">
+            <StackPanel>
+                <TextBlock Text="Результаты" FontSize="30" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}" />
+                <TextBlock Text="Страница-заготовка. После подключения C++ индексатора добавим сюда рабочую логику." Foreground="{StaticResource MutedTextBrush}" Margin="0,10,0,0" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

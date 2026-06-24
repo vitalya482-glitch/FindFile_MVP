@@ -1,0 +1,27 @@
+# Build outputs
+bin/
+obj/
+build/
+build-indexer/
+publish/
+dist/
+*.user
+*.suo
+.vs/
+
+# Index/runtime files
+*.ffdb
+*.checkpoint
+*.lock
+*.log
+*.db
+settings.json
+
+# Python leftovers, если старые файлы ещё остались
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+Thumbs.db
+Desktop.ini

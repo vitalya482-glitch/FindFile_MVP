@@ -1,0 +1,40 @@
+name: Build FindFile Desktop
+
+on:
+  push:
+    branches: [ main, feature/cpp-indexer, feature/xaml-desktop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-desktop:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore desktop/FindFile.Desktop/FindFile.Desktop.csproj
+
+      - name: Publish self-contained WPF app
+        run: |
+          dotnet publish desktop/FindFile.Desktop/FindFile.Desktop.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            /p:PublishSingleFile=true `
+            /p:IncludeNativeLibrariesForSelfExtract=true `
+            /p:EnableCompressionInSingleFile=true
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FindFile-Desktop
+          path: desktop/FindFile.Desktop/bin/Release/net8.0-windows/win-x64/publish/**
