@@ -26,7 +26,17 @@ public sealed class IndexerStatus : ObservableObject
     public long FilesIndexed { get => _filesIndexed; set => SetProperty(ref _filesIndexed, value); }
     public long FoldersIndexed { get => _foldersIndexed; set => SetProperty(ref _foldersIndexed, value); }
     public long Errors { get => _errors; set => SetProperty(ref _errors, value); }
-    public long IndexSizeBytes { get => _indexSizeBytes; set => SetProperty(ref _indexSizeBytes, value); }
+    public long IndexSizeBytes
+    {
+        get => _indexSizeBytes;
+        set
+        {
+            if (SetProperty(ref _indexSizeBytes, value))
+            {
+                OnPropertyChanged(nameof(IndexSizeText));
+            }
+        }
+    }
     public double ProgressPercent { get => _progressPercent; set => SetProperty(ref _progressPercent, value); }
     public string Elapsed { get => _elapsed; set => SetProperty(ref _elapsed, value); }
     public string Remaining { get => _remaining; set => SetProperty(ref _remaining, value); }

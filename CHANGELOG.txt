@@ -1,0 +1,29 @@
+FindFile update: C++ arguments + WPF DTO + ROOT/FIELDS blocks
+
+Что изменено:
+1. C++ CommandLineParser теперь принимает все аргументы, которые передаёт WPF GUI:
+   --root, --output/--index, --session, --batch, --status-interval, --control-interval,
+   --mode, --include-ext, --exclude-ext, --fields,
+   --exclude-dir/--exclude-dirs, --exclude-file/--exclude-files/--exclude-mask/--exclude-masks,
+   --skip-system, --skip-hidden, --skip-already-indexed,
+   --delayed-start, --start-at/--delayed-start-time.
+
+2. Списки теперь универсальные: C++ понимает разделители ; , перевод строки и табуляцию.
+
+3. Расширения нормализуются: .PDF -> .pdf, pdf -> .pdf.
+
+4. DirectoryScanner использует skip-system и skip-hidden через Windows attributes.
+
+5. WPF добавлен DTO IndexerStatusDto для JSON от C++ индексатора.
+
+6. IndexerProcessService теперь мапит snake_case JSON от C++ в IndexerStatus для XAML.
+
+7. В бинарный индекс .ffdb добавлены служебные блоки:
+   ROOT — корневой путь индексации;
+   FLDS — выбранные GUI поля индексации.
+
+8. C++ статус теперь отдаёт index_path, mode и index_size.
+
+Важно:
+- Папка __pycache__ и старый indexer/scanner.py удалены из полного архива проекта.
+- Если применяешь только этот patch-архив вручную, удали их отдельно.

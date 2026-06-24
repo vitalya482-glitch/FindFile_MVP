@@ -29,6 +29,7 @@ public sealed class IndexerProcessService
     /// <summary>
     /// Запускает долгую индексацию.
     /// Команда index стартует отдельный процесс C++ индексатора.
+    /// Все флажки GUI передаются в C++ как универсальные аргументы --key value.
     /// </summary>
     public void StartIndexing(IndexerSettings settings, IEnumerable<ExtensionOption> extensionOptions)
     {
@@ -45,11 +46,18 @@ public sealed class IndexerProcessService
         args.Append($"--output {Quote(settings.IndexPath)} ");
         args.Append("--session main ");
         args.Append("--batch 5000 ");
+        args.Append("--status-interval 1000 ");
+        args.Append("--control-interval 1000 ");
         args.Append($"--mode {settings.IndexMode} ");
         args.Append($"--include-ext {Quote(includeExt)} ");
         args.Append($"--fields {Quote(fields)} ");
         args.Append($"--exclude-dir {Quote(settings.ExcludeDirs)} ");
         args.Append($"--exclude-file {Quote(settings.ExcludeMasks)} ");
+        args.Append($"--skip-system {ToCliBool(settings.SkipSystemFiles)} ");
+        args.Append($"--skip-hidden {ToCliBool(settings.SkipHiddenFiles)} ");
+        args.Append($"--skip-already-indexed {ToCliBool(settings.SkipAlreadyIndexed)} ");
+        args.Append($"--delayed-start {ToCliBool(settings.DelayedStart)} ");
+        args.Append($"--start-at {Quote(settings.DelayedStartTime)} ");
 
         StartDetached(args.ToString());
     }
@@ -65,7 +73,7 @@ public sealed class IndexerProcessService
 
     /// <summary>
     /// Запрашивает статус у индексатора.
-    /// Позже этот метод можно заменить на чтение shared memory напрямую.
+    /// Сейчас команда status читает shared memory внутри C++ и печатает JSON в stdout.
     /// </summary>
     public IndexerStatus GetStatus()
     {
@@ -81,12 +89,14 @@ public sealed class IndexerProcessService
         try
         {
             string json = RunAndCapture("status --session main");
-            var status = JsonSerializer.Deserialize<IndexerStatus>(json, new JsonSerializerOptions
+            var dto = JsonSerializer.Deserialize<IndexerStatusDto>(json, new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true
             });
 
-            return status ?? new IndexerStatus { State = "Нет статуса" };
+            return dto == null
+                ? new IndexerStatus { State = "Нет статуса" }
+                : MapStatus(dto);
         }
         catch
         {
@@ -153,14 +163,25 @@ public sealed class IndexerProcessService
 
     private static string Quote(string value) => $"\"{value}\"";
 
+    private static string ToCliBool(bool value) => value ? "true" : "false";
+
     private static string BuildIncludeExtensions(IEnumerable<ExtensionOption> options, string customExtensions)
     {
-        var selected = options
+        var optionList = options.ToList();
+
+        // Если выбран пункт "Другие", индексатор не должен ограничиваться только известными расширениями.
+        // Пустой include-ext в C++ означает: индексировать все расширения, кроме явно исключённых.
+        if (optionList.Any(o => o.IsEnabled && string.Equals(o.Title, "Другие", StringComparison.OrdinalIgnoreCase)))
+        {
+            return string.Empty;
+        }
+
+        var selected = optionList
             .Where(o => o.IsEnabled)
             .SelectMany(o => o.Extensions.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
 
         var custom = customExtensions.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        return string.Join(',', selected.Concat(custom).Distinct(StringComparer.OrdinalIgnoreCase));
+        return string.Join(';', selected.Concat(custom).Distinct(StringComparer.OrdinalIgnoreCase));
     }
 
     private static string BuildFields(IndexerSettings settings)
@@ -173,6 +194,63 @@ public sealed class IndexerProcessService
         if (settings.StoreExtension) fields.Add("ext");
         if (settings.StoreAttributes) fields.Add("attrs");
         if (settings.StoreFileType) fields.Add("type");
-        return string.Join(',', fields);
+        return string.Join(';', fields);
+    }
+
+    private static IndexerStatus MapStatus(IndexerStatusDto dto)
+    {
+        var status = new IndexerStatus
+        {
+            State = NormalizeState(dto.Status),
+            CurrentPath = string.IsNullOrWhiteSpace(dto.CurrentPath) ? "—" : dto.CurrentPath,
+            FilesIndexed = dto.FilesIndexed,
+            FoldersIndexed = dto.FoldersIndexed,
+            Errors = dto.Errors,
+            IndexSizeBytes = dto.IndexSize,
+            ProgressPercent = 0,
+            Elapsed = FormatDuration(dto.ElapsedSeconds),
+            Remaining = "—",
+            Speed = "—"
+        };
+
+        foreach (var item in dto.Extensions
+                     .OrderByDescending(x => x.Value)
+                     .Take(10))
+        {
+            status.ExtensionStats.Add(new ExtensionStat
+            {
+                Extension = string.IsNullOrWhiteSpace(item.Key) ? "без расширения" : item.Key.TrimStart('.').ToUpperInvariant(),
+                Count = item.Value
+            });
+        }
+
+        return status;
+    }
+
+    private static string NormalizeState(string? state)
+    {
+        return state switch
+        {
+            "starting" => "Запуск",
+            "running" => "Выполняется",
+            "paused" => "Пауза",
+            "stopping" => "Останавливается",
+            "stopped" => "Остановлено",
+            "completed" => "Завершено",
+            "error" => "Ошибка",
+            "empty" => "Нет активного статуса",
+            "busy" => "Статус обновляется",
+            "corrupted" => "Статус повреждён",
+            _ => string.IsNullOrWhiteSpace(state) ? "Нет статуса" : state
+        };
+    }
+
+    private static string FormatDuration(long seconds)
+    {
+        if (seconds <= 0) return "00:00:00";
+        var time = TimeSpan.FromSeconds(seconds);
+        return time.TotalHours >= 24
+            ? $"{(int)time.TotalDays} д. {time:hh\\:mm\\:ss}"
+            : time.ToString("hh\\:mm\\:ss");
     }
 }
