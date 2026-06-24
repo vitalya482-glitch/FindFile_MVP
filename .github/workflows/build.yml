@@ -2,12 +2,9 @@ name: Build FindFile Windows
 
 on:
   push:
-    branches:
-      - main
-      - feature/**
+    branches: [ main, feature/** ]
   pull_request:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -19,60 +16,83 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup .NET
+      - name: Set up .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
       - name: Configure C++ indexer
-        shell: pwsh
-        run: |
-          cmake -S indexer -B build-indexer -A x64
+        run: cmake -S indexer -B build-indexer -A x64
 
       - name: Build C++ indexer
-        shell: pwsh
-        run: |
-          cmake --build build-indexer --config Release
+        run: cmake --build build-indexer --config Release
 
       - name: Publish WPF desktop app
-        shell: pwsh
-        run: |
-          dotnet publish desktop/FindFile.Desktop/FindFile.Desktop.csproj `
-            -c Release `
-            -r win-x64 `
-            --self-contained true `
-            -o publish/FindFile-Windows `
-            /p:PublishSingleFile=true `
-            /p:IncludeNativeLibrariesForSelfExtract=true `
-            /p:EnableCompressionInSingleFile=true
+        run: >-
+          dotnet publish desktop/FindFile.Desktop/FindFile.Desktop.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          /p:PublishSingleFile=true
+          /p:IncludeNativeLibrariesForSelfExtract=true
+          /p:EnableCompressionInSingleFile=true
+          /p:PublishDir=${{ github.workspace }}/publish/FindFile-Windows/
 
-      - name: Copy indexer into app folder
+      - name: Copy indexer next to app
         shell: pwsh
         run: |
-          Copy-Item "build-indexer/Release/FindFileIndexer.exe" "publish/FindFile-Windows/FindFileIndexer.exe" -Force
+          $publishDir = Join-Path $env:GITHUB_WORKSPACE "publish/FindFile-Windows"
+          $indexerCandidates = @(
+            (Join-Path $env:GITHUB_WORKSPACE "build-indexer/Release/FindFileIndexer.exe"),
+            (Join-Path $env:GITHUB_WORKSPACE "build-indexer/src/Release/FindFileIndexer.exe"),
+            (Join-Path $env:GITHUB_WORKSPACE "build-indexer/FindFileIndexer.exe")
+          )
 
-      - name: Create runtime folders
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "publish/FindFile-Windows/data" | Out-Null
-          New-Item -ItemType Directory -Force -Path "publish/FindFile-Windows/logs" | Out-Null
-
-      - name: Create ZIP package
-        shell: pwsh
-        run: |
-          if (Test-Path "FindFile-Windows.zip") {
-            Remove-Item "FindFile-Windows.zip" -Force
+          $indexerPath = $indexerCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $indexerPath) {
+            Write-Host "Indexer candidates checked:"
+            $indexerCandidates | ForEach-Object { Write-Host " - $_" }
+            throw "FindFileIndexer.exe not found after C++ build."
           }
-          Compress-Archive -Path "publish/FindFile-Windows/*" -DestinationPath "FindFile-Windows.zip" -Force
 
-      - name: Upload package artifact
+          Copy-Item $indexerPath (Join-Path $publishDir "FindFileIndexer.exe") -Force
+
+      - name: Add default folders and info files
+        shell: pwsh
+        run: |
+          $publishDir = Join-Path $env:GITHUB_WORKSPACE "publish/FindFile-Windows"
+          New-Item -ItemType Directory -Force -Path (Join-Path $publishDir "data") | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $publishDir "logs") | Out-Null
+
+          $readme = @"
+          FindFile Windows build
+
+          Files:
+          - FindFile.exe: WPF/XAML desktop interface
+          - FindFileIndexer.exe: C++ indexing engine
+          - data/: index storage folder
+          - logs/: log folder
+          "@
+          Set-Content -Path (Join-Path $publishDir "README.txt") -Value $readme -Encoding UTF8
+
+      - name: Create zip package
+        shell: pwsh
+        run: |
+          $publishDir = Join-Path $env:GITHUB_WORKSPACE "publish/FindFile-Windows"
+          $zipPath = Join-Path $env:GITHUB_WORKSPACE "FindFile-Windows.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Compress-Archive -Path (Join-Path $publishDir "*") -DestinationPath $zipPath -Force
+
+      - name: Show package contents
+        shell: pwsh
+        run: |
+          $publishDir = Join-Path $env:GITHUB_WORKSPACE "publish/FindFile-Windows"
+          Get-ChildItem $publishDir | Select-Object Name, Length, LastWriteTime
+          Write-Host "ZIP: $env:GITHUB_WORKSPACE/FindFile-Windows.zip"
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: FindFile-Windows
           path: FindFile-Windows.zip
-
-      - name: Upload unpacked app artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: FindFile-Windows-Unpacked
-          path: publish/FindFile-Windows/
+          if-no-files-found: error
