@@ -1,0 +1,78 @@
+name: Build FindFile Windows
+
+on:
+  push:
+    branches:
+      - main
+      - feature/**
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build FindFile.exe + FindFileIndexer.exe
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Configure C++ indexer
+        shell: pwsh
+        run: |
+          cmake -S indexer -B build-indexer -A x64
+
+      - name: Build C++ indexer
+        shell: pwsh
+        run: |
+          cmake --build build-indexer --config Release
+
+      - name: Publish WPF desktop app
+        shell: pwsh
+        run: |
+          dotnet publish desktop/FindFile.Desktop/FindFile.Desktop.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -o publish/FindFile-Windows `
+            /p:PublishSingleFile=true `
+            /p:IncludeNativeLibrariesForSelfExtract=true `
+            /p:EnableCompressionInSingleFile=true
+
+      - name: Copy indexer into app folder
+        shell: pwsh
+        run: |
+          Copy-Item "build-indexer/Release/FindFileIndexer.exe" "publish/FindFile-Windows/FindFileIndexer.exe" -Force
+
+      - name: Create runtime folders
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "publish/FindFile-Windows/data" | Out-Null
+          New-Item -ItemType Directory -Force -Path "publish/FindFile-Windows/logs" | Out-Null
+
+      - name: Create ZIP package
+        shell: pwsh
+        run: |
+          if (Test-Path "FindFile-Windows.zip") {
+            Remove-Item "FindFile-Windows.zip" -Force
+          }
+          Compress-Archive -Path "publish/FindFile-Windows/*" -DestinationPath "FindFile-Windows.zip" -Force
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FindFile-Windows
+          path: FindFile-Windows.zip
+
+      - name: Upload unpacked app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FindFile-Windows-Unpacked
+          path: publish/FindFile-Windows/
