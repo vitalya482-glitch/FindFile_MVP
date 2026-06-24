@@ -1,0 +1,65 @@
+name: Release FindFile Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-release:
+    name: Build release package
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build FindFile.exe
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name FindFile app.py
+
+      - name: Configure C++ indexer
+        shell: pwsh
+        run: |
+          cmake -S indexer -B build-indexer -A x64
+
+      - name: Build FindFileIndexer.exe
+        shell: pwsh
+        run: |
+          cmake --build build-indexer --config Release
+
+      - name: Prepare package folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item dist/FindFile.exe package/FindFile.exe
+          Copy-Item build-indexer/Release/FindFileIndexer.exe package/FindFileIndexer.exe
+          if (Test-Path README.md) { Copy-Item README.md package/README.md }
+          Compress-Archive -Path package/* -DestinationPath FindFile-Windows.zip -Force
+
+      - name: Upload release package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FindFile-Windows
+          path: FindFile-Windows.zip
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: FindFile-Windows.zip
