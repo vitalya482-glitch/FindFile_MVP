@@ -3,9 +3,35 @@ name: Build FindFile Windows
 on:
   push:
     branches: [ main, feature/** ]
+
   pull_request:
     branches: [ main ]
+
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Release version, example: v0.1.0. Leave empty to build artifact only."
+        required: false
+        default: ""
+      release_notes:
+        description: "Release notes for manifest and GitHub release."
+        required: false
+        default: "FindFile update."
+
+permissions:
+  contents: write
+
+env:
+  APP_ID: findfile
+  APP_NAME: FindFile
+  MAIN_EXE: FindFile.exe
+  PACKAGE_NAME: FindFile-win-x64.zip
+  LVK_UPDATER_VERSION: v0.1.0
+  LVK_UPDATER_ZIP_URL: https://github.com/vitalya482-glitch/LVK-Updater/releases/download/v0.1.0/LVKUpdater-win-x64.zip
+  UPDATE_FEED_REPO: vitalya482-glitch/LVK-Update-Feed
+  UPDATE_FEED_BRANCH: main
+  UPDATE_FEED_MANIFEST_PATH: manifests/findfile.json
+  UPDATE_MANIFEST_URL: https://raw.githubusercontent.com/vitalya482-glitch/LVK-Update-Feed/main/manifests/findfile.json
 
 jobs:
   build-windows:
@@ -15,6 +41,25 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set release variables
+        shell: pwsh
+        run: |
+          $releaseVersion = "${{ github.event.inputs.release_version }}"
+          if ([string]::IsNullOrWhiteSpace($releaseVersion)) {
+            $releaseVersion = "dev-${{ github.run_number }}"
+          }
+
+          $cleanVersion = $releaseVersion
+          if ($cleanVersion.StartsWith("v")) {
+            $cleanVersion = $cleanVersion.Substring(1)
+          }
+
+          "RELEASE_VERSION=$releaseVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CLEAN_VERSION=$cleanVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          Write-Host "Release version: $releaseVersion"
+          Write-Host "Clean version: $cleanVersion"
 
       - name: Set up .NET 8
         uses: actions/setup-dotnet@v4
@@ -42,6 +87,7 @@ jobs:
         shell: pwsh
         run: |
           $publishDir = Join-Path $env:GITHUB_WORKSPACE "publish/FindFile-Windows"
+
           $indexerCandidates = @(
             (Join-Path $env:GITHUB_WORKSPACE "build-indexer/Release/FindFileIndexer.exe"),
             (Join-Path $env:GITHUB_WORKSPACE "build-indexer/src/Release/FindFileIndexer.exe"),
@@ -49,6 +95,7 @@ jobs:
           )
 
           $indexerPath = $indexerCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
           if (-not $indexerPath) {
             Write-Host "Indexer candidates checked:"
             $indexerCandidates | ForEach-Object { Write-Host " - $_" }
@@ -56,13 +103,68 @@ jobs:
           }
 
           Copy-Item $indexerPath (Join-Path $publishDir "FindFileIndexer.exe") -Force
+          Write-Host "Copied indexer: $indexerPath"
 
-      - name: Add default folders and info files
+      - name: Download LVKUpdater
+        shell: pwsh
+        env:
+          LVK_PRIVATE_REPO_TOKEN: ${{ secrets.LVK_PRIVATE_REPO_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:LVK_PRIVATE_REPO_TOKEN)) {
+            throw "Secret LVK_PRIVATE_REPO_TOKEN is missing. It is required to download LVKUpdater from private repository."
+          }
+
+          $toolsDir = Join-Path $env:GITHUB_WORKSPACE "tools"
+          New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
+
+          $updaterZip = Join-Path $toolsDir "LVKUpdater-win-x64.zip"
+          $updaterExtract = Join-Path $toolsDir "LVKUpdater"
+
+          $headers = @{
+            Authorization = "Bearer $env:LVK_PRIVATE_REPO_TOKEN"
+            "User-Agent" = "GitHubActions-FindFile"
+          }
+
+          Invoke-WebRequest -Uri "${{ env.LVK_UPDATER_ZIP_URL }}" -Headers $headers -OutFile $updaterZip
+
+          if (Test-Path $updaterExtract) {
+            Remove-Item $updaterExtract -Recurse -Force
+          }
+
+          New-Item -ItemType Directory -Force -Path $updaterExtract | Out-Null
+          Expand-Archive -Path $updaterZip -DestinationPath $updaterExtract -Force
+
+          $updaterExe = Get-ChildItem $updaterExtract -Recurse -Filter "LVKUpdater.exe" | Select-Object -First 1
+
+          if (-not $updaterExe) {
+            throw "LVKUpdater.exe not found inside downloaded package."
+          }
+
+          $publishDir = Join-Path $env:GITHUB_WORKSPACE "publish/FindFile-Windows"
+          Copy-Item $updaterExe.FullName (Join-Path $publishDir "LVKUpdater.exe") -Force
+
+          Write-Host "LVKUpdater copied to package."
+
+      - name: Add default folders and update config
         shell: pwsh
         run: |
           $publishDir = Join-Path $env:GITHUB_WORKSPACE "publish/FindFile-Windows"
+
           New-Item -ItemType Directory -Force -Path (Join-Path $publishDir "data") | Out-Null
           New-Item -ItemType Directory -Force -Path (Join-Path $publishDir "logs") | Out-Null
+
+          $appUpdate = [ordered]@{
+            schemaVersion = 1
+            appId = "${{ env.APP_ID }}"
+            name = "${{ env.APP_NAME }}"
+            currentVersion = "$env:CLEAN_VERSION"
+            channel = "stable"
+            mainExe = "${{ env.MAIN_EXE }}"
+            manifestUrl = "${{ env.UPDATE_MANIFEST_URL }}"
+          }
+
+          $appUpdateJson = $appUpdate | ConvertTo-Json -Depth 10
+          Set-Content -Path (Join-Path $publishDir "app.update.json") -Value $appUpdateJson -Encoding UTF8
 
           $readme = @"
           FindFile Windows build
@@ -70,29 +172,115 @@ jobs:
           Files:
           - FindFile.exe: WPF/XAML desktop interface
           - FindFileIndexer.exe: C++ indexing engine
+          - LVKUpdater.exe: update installer
+          - app.update.json: local update config
           - data/: index storage folder
           - logs/: log folder
           "@
+
           Set-Content -Path (Join-Path $publishDir "README.txt") -Value $readme -Encoding UTF8
 
       - name: Create zip package
         shell: pwsh
         run: |
           $publishDir = Join-Path $env:GITHUB_WORKSPACE "publish/FindFile-Windows"
-          $zipPath = Join-Path $env:GITHUB_WORKSPACE "FindFile-Windows.zip"
-          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          $zipPath = Join-Path $env:GITHUB_WORKSPACE "${{ env.PACKAGE_NAME }}"
+
+          if (Test-Path $zipPath) {
+            Remove-Item $zipPath -Force
+          }
+
           Compress-Archive -Path (Join-Path $publishDir "*") -DestinationPath $zipPath -Force
+
+          $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLower()
+          $size = (Get-Item $zipPath).Length
+
+          "PACKAGE_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PACKAGE_SIZE=$size" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          Write-Host "Package: $zipPath"
+          Write-Host "SHA256: $hash"
+          Write-Host "Size: $size"
 
       - name: Show package contents
         shell: pwsh
         run: |
           $publishDir = Join-Path $env:GITHUB_WORKSPACE "publish/FindFile-Windows"
           Get-ChildItem $publishDir | Select-Object Name, Length, LastWriteTime
-          Write-Host "ZIP: $env:GITHUB_WORKSPACE/FindFile-Windows.zip"
+          Write-Host "ZIP: $env:GITHUB_WORKSPACE/${{ env.PACKAGE_NAME }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FindFile-Windows
-          path: FindFile-Windows.zip
+          name: FindFile-win-x64
+          path: FindFile-win-x64.zip
           if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_version != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_VERSION }}
+          name: FindFile ${{ env.RELEASE_VERSION }}
+          body: |
+            FindFile release ${{ env.RELEASE_VERSION }}
+
+            Notes:
+            ${{ github.event.inputs.release_notes }}
+
+            Package:
+            - FindFile-win-x64.zip
+            - SHA256: ${{ env.PACKAGE_SHA256 }}
+            - Size: ${{ env.PACKAGE_SIZE }} bytes
+          files: FindFile-win-x64.zip
+
+      - name: Update LVK Update Feed
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_version != '' }}
+        shell: pwsh
+        env:
+          LVK_UPDATE_FEED_TOKEN: ${{ secrets.LVK_UPDATE_FEED_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:LVK_UPDATE_FEED_TOKEN)) {
+            throw "Secret LVK_UPDATE_FEED_TOKEN is missing. It is required to update LVK-Update-Feed."
+          }
+
+          $feedDir = Join-Path $env:GITHUB_WORKSPACE "LVK-Update-Feed"
+
+          git clone "https://x-access-token:$env:LVK_UPDATE_FEED_TOKEN@github.com/${{ env.UPDATE_FEED_REPO }}.git" $feedDir
+
+          $manifestPath = Join-Path $feedDir "${{ env.UPDATE_FEED_MANIFEST_PATH }}"
+          $releaseDate = (Get-Date).ToString("yyyy-MM-dd")
+          $packageUrl = "https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_VERSION/${{ env.PACKAGE_NAME }}"
+
+          $notesText = "${{ github.event.inputs.release_notes }}"
+          if ([string]::IsNullOrWhiteSpace($notesText)) {
+            $notesText = "FindFile update."
+          }
+
+          $manifest = [ordered]@{
+            schemaVersion = 1
+            appId = "${{ env.APP_ID }}"
+            name = "${{ env.APP_NAME }}"
+            latestVersion = "$env:CLEAN_VERSION"
+            channel = "stable"
+            mandatory = $false
+            releaseDate = $releaseDate
+            mainExe = "${{ env.MAIN_EXE }}"
+            package = [ordered]@{
+              url = $packageUrl
+              sha256 = "$env:PACKAGE_SHA256"
+              size = [int64]$env:PACKAGE_SIZE
+            }
+            notes = @($notesText)
+          }
+
+          $manifestJson = $manifest | ConvertTo-Json -Depth 10
+          Set-Content -Path $manifestPath -Value $manifestJson -Encoding UTF8
+
+          Set-Location $feedDir
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add "${{ env.UPDATE_FEED_MANIFEST_PATH }}"
+          git commit -m "Update FindFile manifest to $env:RELEASE_VERSION" || echo "No changes to commit"
+          git push origin "${{ env.UPDATE_FEED_BRANCH }}"
