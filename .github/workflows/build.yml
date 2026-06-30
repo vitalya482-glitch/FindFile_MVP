@@ -9,10 +9,14 @@ on:
 
   workflow_dispatch:
     inputs:
-      release_version:
-        description: "Release version, example: v0.1.0. Leave empty to build artifact only."
-        required: false
-        default: ""
+      publish_release:
+        description: "Create GitHub Release and update LVK-Update-Feed"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
       release_notes:
         description: "Release notes for manifest and GitHub release."
         required: false
@@ -42,24 +46,46 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set release variables
+      - name: Read version from VERSION file
         shell: pwsh
         run: |
-          $releaseVersion = "${{ github.event.inputs.release_version }}"
-          if ([string]::IsNullOrWhiteSpace($releaseVersion)) {
-            $releaseVersion = "dev-${{ github.run_number }}"
+          if (-not (Test-Path "VERSION")) {
+            throw "VERSION file not found in repository root."
           }
 
-          $cleanVersion = $releaseVersion
+          $cleanVersion = (Get-Content "VERSION" -Raw).Trim()
+
+          if ([string]::IsNullOrWhiteSpace($cleanVersion)) {
+            throw "VERSION file is empty."
+          }
+
           if ($cleanVersion.StartsWith("v")) {
             $cleanVersion = $cleanVersion.Substring(1)
           }
 
-          "RELEASE_VERSION=$releaseVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "CLEAN_VERSION=$cleanVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          if ($cleanVersion -notmatch '^\d+\.\d+\.\d+$') {
+            throw "VERSION must be in format 0.1.0, current value: $cleanVersion"
+          }
 
-          Write-Host "Release version: $releaseVersion"
+          $releaseVersion = "v$cleanVersion"
+
+          "CLEAN_VERSION=$cleanVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RELEASE_VERSION=$releaseVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+
           Write-Host "Clean version: $cleanVersion"
+          Write-Host "Release version: $releaseVersion"
+
+      - name: Set publish mode
+        shell: pwsh
+        run: |
+          $publishRelease = "false"
+
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ github.event.inputs.publish_release }}" -eq "true") {
+            $publishRelease = "true"
+          }
+
+          "PUBLISH_RELEASE=$publishRelease" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Publish release: $publishRelease"
 
       - name: Set up .NET 8
         uses: actions/setup-dotnet@v4
@@ -105,7 +131,51 @@ jobs:
           Copy-Item $indexerPath (Join-Path $publishDir "FindFileIndexer.exe") -Force
           Write-Host "Copied indexer: $indexerPath"
 
-      - name: Download LVKUpdater
+            - name: Download LVKUpdater
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.LVK_PRIVATE_REPO_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw "Secret LVK_PRIVATE_REPO_TOKEN is missing. It is required to download LVKUpdater from private repository."
+          }
+
+          $toolsDir = Join-Path $env:GITHUB_WORKSPACE "tools"
+          New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
+
+          $updaterExtract = Join-Path $toolsDir "LVKUpdater"
+          if (Test-Path $updaterExtract) {
+            Remove-Item $updaterExtract -Recurse -Force
+          }
+
+          New-Item -ItemType Directory -Force -Path $updaterExtract | Out-Null
+
+          gh release download "${{ env.LVK_UPDATER_VERSION }}" `
+            --repo "vitalya482-glitch/LVK-Updater" `
+            --pattern "LVKUpdater-win-x64.zip" `
+            --dir $toolsDir `
+            --clobber
+
+          $updaterZip = Join-Path $toolsDir "LVKUpdater-win-x64.zip"
+
+          if (-not (Test-Path $updaterZip)) {
+            throw "LVKUpdater-win-x64.zip was not downloaded."
+          }
+
+          Expand-Archive -Path $updaterZip -DestinationPath $updaterExtract -Force
+
+          $updaterExe = Get-ChildItem $updaterExtract -Recurse -Filter "LVKUpdater.exe" | Select-Object -First 1
+
+          if (-not $updaterExe) {
+            throw "LVKUpdater.exe not found inside downloaded package."
+          }
+
+          $publishDir = Join-Path $env:GITHUB_WORKSPACE "publish/FindFile-Windows"
+          Copy-Item $updaterExe.FullName (Join-Path $publishDir "LVKUpdater.exe") -Force
+
+          Write-Host "LVKUpdater copied to package."
+
+          
         shell: pwsh
         env:
           LVK_PRIVATE_REPO_TOKEN: ${{ secrets.LVK_PRIVATE_REPO_TOKEN }}
@@ -169,6 +239,8 @@ jobs:
           $readme = @"
           FindFile Windows build
 
+          Version: $env:CLEAN_VERSION
+
           Files:
           - FindFile.exe: WPF/XAML desktop interface
           - FindFileIndexer.exe: C++ indexing engine
@@ -217,7 +289,7 @@ jobs:
           if-no-files-found: error
 
       - name: Create GitHub Release
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_version != '' }}
+        if: ${{ env.PUBLISH_RELEASE == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_VERSION }}
@@ -235,7 +307,7 @@ jobs:
           files: FindFile-win-x64.zip
 
       - name: Update LVK Update Feed
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_version != '' }}
+        if: ${{ env.PUBLISH_RELEASE == 'true' }}
         shell: pwsh
         env:
           LVK_UPDATE_FEED_TOKEN: ${{ secrets.LVK_UPDATE_FEED_TOKEN }}
