@@ -2,25 +2,17 @@ name: Build FindFile Windows
 
 on:
   push:
-    branches: [ main, feature/** ]
+    branches: [ main ]
 
   pull_request:
     branches: [ main ]
 
   workflow_dispatch:
     inputs:
-      publish_release:
-        description: "Create GitHub Release and update LVK-Update-Feed"
-        required: true
-        default: "true"
-        type: choice
-        options:
-          - "true"
-          - "false"
       release_notes:
-        description: "Release notes for manifest and GitHub release."
+        description: "Release notes for dev-latest manifest and GitHub release."
         required: false
-        default: "FindFile update."
+        default: "FindFile development update."
 
 permissions:
   contents: write
@@ -30,6 +22,7 @@ env:
   APP_NAME: FindFile
   MAIN_EXE: FindFile.exe
   PACKAGE_NAME: FindFile-win-x64.zip
+  DEV_RELEASE_TAG: dev-latest
   LVK_UPDATER_VERSION: v0.1.0
   UPDATE_FEED_REPO: vitalya482-glitch/LVK-Update-Feed
   UPDATE_FEED_BRANCH: main
@@ -45,46 +38,53 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Read version from VERSION file
+      - name: Read base version and create build version
         shell: pwsh
         run: |
           if (-not (Test-Path "VERSION")) {
             throw "VERSION file not found in repository root."
           }
 
-          $cleanVersion = (Get-Content "VERSION" -Raw).Trim()
+          $baseVersion = (Get-Content "VERSION" -Raw).Trim()
 
-          if ([string]::IsNullOrWhiteSpace($cleanVersion)) {
+          if ([string]::IsNullOrWhiteSpace($baseVersion)) {
             throw "VERSION file is empty."
           }
 
-          if ($cleanVersion.StartsWith("v")) {
-            $cleanVersion = $cleanVersion.Substring(1)
+          if ($baseVersion.StartsWith("v")) {
+            $baseVersion = $baseVersion.Substring(1)
           }
 
-          if ($cleanVersion -notmatch '^\d+\.\d+\.\d+$') {
-            throw "VERSION must be in format 0.1.0, current value: $cleanVersion"
+          if ($baseVersion -notmatch '^\d+\.\d+\.\d+$') {
+            throw "VERSION must be in format 0.1.0, current value: $baseVersion"
           }
 
-          $releaseVersion = "v$cleanVersion"
+          $buildVersion = "$baseVersion.${{ github.run_number }}"
+          $releaseTag = "${{ env.DEV_RELEASE_TAG }}"
 
-          "CLEAN_VERSION=$cleanVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "RELEASE_VERSION=$releaseVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "BASE_VERSION=$baseVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "BUILD_VERSION=$buildVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RELEASE_TAG=$releaseTag" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-          Write-Host "Clean version: $cleanVersion"
-          Write-Host "Release version: $releaseVersion"
+          Write-Host "Base version: $baseVersion"
+          Write-Host "Build version: $buildVersion"
+          Write-Host "Release tag: $releaseTag"
 
       - name: Set publish mode
         shell: pwsh
         run: |
-          $publishRelease = "false"
+          $publishDevLatest = "false"
 
-          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ github.event.inputs.publish_release }}" -eq "true") {
-            $publishRelease = "true"
+          if ("${{ github.event_name }}" -eq "push" -and "${{ github.ref }}" -eq "refs/heads/main") {
+            $publishDevLatest = "true"
           }
 
-          "PUBLISH_RELEASE=$publishRelease" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "Publish release: $publishRelease"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $publishDevLatest = "true"
+          }
+
+          "PUBLISH_DEV_LATEST=$publishDevLatest" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Publish dev-latest: $publishDevLatest"
 
       - name: Set up .NET 8
         uses: actions/setup-dotnet@v4
@@ -186,8 +186,8 @@ jobs:
             schemaVersion = 1
             appId = "${{ env.APP_ID }}"
             name = "${{ env.APP_NAME }}"
-            currentVersion = "$env:CLEAN_VERSION"
-            channel = "stable"
+            currentVersion = "$env:BUILD_VERSION"
+            channel = "dev"
             mainExe = "${{ env.MAIN_EXE }}"
             manifestUrl = "${{ env.UPDATE_MANIFEST_URL }}"
           }
@@ -198,7 +198,8 @@ jobs:
           $readme = @"
           FindFile Windows build
 
-          Version: $env:CLEAN_VERSION
+          Version: $env:BUILD_VERSION
+          Channel: dev
 
           Files:
           - FindFile.exe: WPF/XAML desktop interface
@@ -247,17 +248,30 @@ jobs:
           path: FindFile-win-x64.zip
           if-no-files-found: error
 
-      - name: Create GitHub Release
-        if: ${{ env.PUBLISH_RELEASE == 'true' }}
+      - name: Delete old dev-latest release
+        if: ${{ env.PUBLISH_DEV_LATEST == 'true' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete "${{ env.DEV_RELEASE_TAG }}" --repo "${{ github.repository }}" --yes --cleanup-tag 2>$null
+          Write-Host "Old dev-latest release deleted if it existed."
+
+      - name: Create dev-latest release
+        if: ${{ env.PUBLISH_DEV_LATEST == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_VERSION }}
-          name: FindFile ${{ env.RELEASE_VERSION }}
+          tag_name: ${{ env.DEV_RELEASE_TAG }}
+          name: FindFile dev-latest (${{ env.BUILD_VERSION }})
           body: |
-            FindFile release ${{ env.RELEASE_VERSION }}
+            FindFile development build ${{ env.BUILD_VERSION }}
+
+            Source:
+            - Commit: ${{ github.sha }}
+            - Run number: ${{ github.run_number }}
 
             Notes:
-            ${{ github.event.inputs.release_notes }}
+            ${{ github.event.inputs.release_notes || 'FindFile development update.' }}
 
             Package:
             - FindFile-win-x64.zip
@@ -266,7 +280,7 @@ jobs:
           files: FindFile-win-x64.zip
 
       - name: Update LVK Update Feed
-        if: ${{ env.PUBLISH_RELEASE == 'true' }}
+        if: ${{ env.PUBLISH_DEV_LATEST == 'true' }}
         shell: pwsh
         env:
           LVK_UPDATE_FEED_TOKEN: ${{ secrets.LVK_UPDATE_FEED_TOKEN }}
@@ -281,19 +295,19 @@ jobs:
 
           $manifestPath = Join-Path $feedDir "${{ env.UPDATE_FEED_MANIFEST_PATH }}"
           $releaseDate = (Get-Date).ToString("yyyy-MM-dd")
-          $packageUrl = "https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_VERSION/${{ env.PACKAGE_NAME }}"
+          $packageUrl = "https://github.com/${{ github.repository }}/releases/download/${{ env.DEV_RELEASE_TAG }}/${{ env.PACKAGE_NAME }}"
 
           $notesText = "${{ github.event.inputs.release_notes }}"
           if ([string]::IsNullOrWhiteSpace($notesText)) {
-            $notesText = "FindFile update."
+            $notesText = "FindFile development update from commit ${{ github.sha }}."
           }
 
           $manifest = [ordered]@{
             schemaVersion = 1
             appId = "${{ env.APP_ID }}"
             name = "${{ env.APP_NAME }}"
-            latestVersion = "$env:CLEAN_VERSION"
-            channel = "stable"
+            latestVersion = "$env:BUILD_VERSION"
+            channel = "dev"
             mandatory = $false
             releaseDate = $releaseDate
             mainExe = "${{ env.MAIN_EXE }}"
@@ -313,5 +327,5 @@ jobs:
           git config user.email "github-actions@github.com"
 
           git add "${{ env.UPDATE_FEED_MANIFEST_PATH }}"
-          git commit -m "Update FindFile manifest to $env:RELEASE_VERSION" || echo "No changes to commit"
+          git commit -m "Update FindFile dev manifest to $env:BUILD_VERSION" || echo "No changes to commit"
           git push origin "${{ env.UPDATE_FEED_BRANCH }}"
