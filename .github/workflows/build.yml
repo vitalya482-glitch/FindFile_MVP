@@ -31,7 +31,6 @@ env:
   MAIN_EXE: FindFile.exe
   PACKAGE_NAME: FindFile-win-x64.zip
   LVK_UPDATER_VERSION: v0.1.0
-  LVK_UPDATER_ZIP_URL: https://github.com/vitalya482-glitch/LVK-Updater/releases/download/v0.1.0/LVKUpdater-win-x64.zip
   UPDATE_FEED_REPO: vitalya482-glitch/LVK-Update-Feed
   UPDATE_FEED_BRANCH: main
   UPDATE_FEED_MANIFEST_PATH: manifests/findfile.json
@@ -131,7 +130,7 @@ jobs:
           Copy-Item $indexerPath (Join-Path $publishDir "FindFileIndexer.exe") -Force
           Write-Host "Copied indexer: $indexerPath"
 
-            - name: Download LVKUpdater
+      - name: Download LVKUpdater
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.LVK_PRIVATE_REPO_TOKEN }}
@@ -162,46 +161,6 @@ jobs:
             throw "LVKUpdater-win-x64.zip was not downloaded."
           }
 
-          Expand-Archive -Path $updaterZip -DestinationPath $updaterExtract -Force
-
-          $updaterExe = Get-ChildItem $updaterExtract -Recurse -Filter "LVKUpdater.exe" | Select-Object -First 1
-
-          if (-not $updaterExe) {
-            throw "LVKUpdater.exe not found inside downloaded package."
-          }
-
-          $publishDir = Join-Path $env:GITHUB_WORKSPACE "publish/FindFile-Windows"
-          Copy-Item $updaterExe.FullName (Join-Path $publishDir "LVKUpdater.exe") -Force
-
-          Write-Host "LVKUpdater copied to package."
-
-          
-        shell: pwsh
-        env:
-          LVK_PRIVATE_REPO_TOKEN: ${{ secrets.LVK_PRIVATE_REPO_TOKEN }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:LVK_PRIVATE_REPO_TOKEN)) {
-            throw "Secret LVK_PRIVATE_REPO_TOKEN is missing. It is required to download LVKUpdater from private repository."
-          }
-
-          $toolsDir = Join-Path $env:GITHUB_WORKSPACE "tools"
-          New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
-
-          $updaterZip = Join-Path $toolsDir "LVKUpdater-win-x64.zip"
-          $updaterExtract = Join-Path $toolsDir "LVKUpdater"
-
-          $headers = @{
-            Authorization = "Bearer $env:LVK_PRIVATE_REPO_TOKEN"
-            "User-Agent" = "GitHubActions-FindFile"
-          }
-
-          Invoke-WebRequest -Uri "${{ env.LVK_UPDATER_ZIP_URL }}" -Headers $headers -OutFile $updaterZip
-
-          if (Test-Path $updaterExtract) {
-            Remove-Item $updaterExtract -Recurse -Force
-          }
-
-          New-Item -ItemType Directory -Force -Path $updaterExtract | Out-Null
           Expand-Archive -Path $updaterZip -DestinationPath $updaterExtract -Force
 
           $updaterExe = Get-ChildItem $updaterExtract -Recurse -Filter "LVKUpdater.exe" | Select-Object -First 1
