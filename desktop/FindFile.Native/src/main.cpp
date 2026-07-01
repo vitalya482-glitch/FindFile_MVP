@@ -53,6 +53,8 @@ constexpr int IDC_INSTALL_UPDATE_BTN = 1022;
 constexpr int IDC_OPEN_FEED_BTN = 1023;
 constexpr int IDC_OPEN_UPDATER_LOG_BTN = 1024;
 constexpr int IDC_PAGE_INFO = 1025;
+constexpr int IDC_RESULTS_SOURCE_LABEL = 1026;
+constexpr int IDC_RESULTS_SOURCE_COMBO = 1027;
 constexpr UINT WM_APP_INDEX_DONE = WM_APP + 10;
 constexpr UINT WM_APP_SEARCH_DONE = WM_APP + 11;
 
@@ -62,7 +64,7 @@ struct AppState {
     HWND rootGroup{}, rootCombo{}, browseButton{}, checkRootButton{}, rootStatus{};
     HWND indexGroup{}, startIndexButton{}, stopIndexButton{};
     HWND tabs{}, queryLabel{}, queryEdit{}, onlyNameCheck{}, caseCheck{}, searchButton{}, clearButton{};
-    HWND results{}, statusBar{}; HWND updateInfo{}, checkUpdatesButton{}, installUpdateButton{}, openFeedButton{}, openUpdaterLogButton{}; HWND pageInfo{}; HFONT uiFont{}; int dpi = 96;
+    HWND results{}, statusBar{}; HWND updateInfo{}, checkUpdatesButton{}, installUpdateButton{}, openFeedButton{}, openUpdaterLogButton{}; HWND pageInfo{}; HWND resultsSourceLabel{}, resultsSourceCombo{}; HFONT uiFont{}; int dpi = 96;
     fs::path appDir, dataDir, logsDir, indexPath, resultsPath, rootPathFile, settingsFile, guiLogFile, appUpdateConfig, updateManifestCache, updatePackageFile, indexSummaryFile;
     std::chrono::steady_clock::time_point indexStartedAt{};
     double lastIndexSeconds = -1.0;
@@ -142,7 +144,7 @@ std::wstring getText(HWND h){ int len=GetWindowTextLengthW(h); std::wstring t((s
 void setText(HWND h,const std::wstring& t){ SetWindowTextW(h,t.c_str()); }
 HFONT createSystemFont(){ NONCLIENTMETRICSW m{}; m.cbSize=sizeof(m); SystemParametersInfoW(SPI_GETNONCLIENTMETRICS,sizeof(m),&m,0); return CreateFontIndirectW(&m.lfMessageFont); }
 void applyFont(HWND h){ if(h&&g_app.uiFont) SendMessageW(h,WM_SETFONT,(WPARAM)g_app.uiFont,TRUE); }
-void applyFonts(){ for(HWND h:{g_app.rootGroup,g_app.rootCombo,g_app.browseButton,g_app.checkRootButton,g_app.rootStatus,g_app.indexGroup,g_app.startIndexButton,g_app.stopIndexButton,g_app.tabs,g_app.queryLabel,g_app.queryEdit,g_app.onlyNameCheck,g_app.caseCheck,g_app.searchButton,g_app.clearButton,g_app.results,g_app.statusBar,g_app.updateInfo,g_app.checkUpdatesButton,g_app.installUpdateButton,g_app.openFeedButton,g_app.openUpdaterLogButton,g_app.pageInfo}) applyFont(h); }
+void applyFonts(){ for(HWND h:{g_app.rootGroup,g_app.rootCombo,g_app.browseButton,g_app.checkRootButton,g_app.rootStatus,g_app.indexGroup,g_app.startIndexButton,g_app.stopIndexButton,g_app.tabs,g_app.queryLabel,g_app.queryEdit,g_app.onlyNameCheck,g_app.caseCheck,g_app.searchButton,g_app.clearButton,g_app.results,g_app.statusBar,g_app.updateInfo,g_app.checkUpdatesButton,g_app.installUpdateButton,g_app.openFeedButton,g_app.openUpdaterLogButton,g_app.pageInfo,g_app.resultsSourceLabel,g_app.resultsSourceCombo}) applyFont(h); }
 void recreateFont(){ if(g_app.uiFont) DeleteObject(g_app.uiFont); g_app.uiFont=createSystemFont(); applyFonts(); }
 void addComboItem(const std::wstring& v){ if(v.empty()) return; LRESULT c=SendMessageW(g_app.rootCombo,CB_GETCOUNT,0,0); for(LRESULT i=0;i<c;++i){ wchar_t b[32768]{}; SendMessageW(g_app.rootCombo,CB_GETLBTEXT,(WPARAM)i,(LPARAM)b); if(_wcsicmp(b,v.c_str())==0) return;} SendMessageW(g_app.rootCombo,CB_ADDSTRING,0,(LPARAM)v.c_str()); }
 void saveTextFile(const fs::path& p,const std::wstring& v){ std::ofstream o(p,std::ios::binary|std::ios::trunc); o<<wideToUtf8(v); }
@@ -309,15 +311,35 @@ void refreshPageInfo() {
     int tab = g_app.tabs ? TabCtrl_GetCurSel(g_app.tabs) : 0;
     std::wstringstream out;
     if (tab == 1) {
+        int mode = g_app.resultsSourceCombo ? (int)SendMessageW(g_app.resultsSourceCombo, CB_GETCURSEL, 0, 0) : 0;
+        if (mode < 0) mode = 0;
+        wchar_t sourceText[256]{};
+        if (g_app.resultsSourceCombo) SendMessageW(g_app.resultsSourceCombo, CB_GETLBTEXT, (WPARAM)mode, (LPARAM)sourceText);
+
+        out << L"Источник статистики: " << (sourceText[0] ? sourceText : L"Общий индекс") << L"\r\n";
+        out << L"==================================================\r\n\r\n";
+
         std::wstring summaryText = (g_app.lastIndexSeconds < 0 && fs::exists(g_app.indexSummaryFile)) ? readTextFile(g_app.indexSummaryFile) : buildIndexStatisticsText(g_app.lastIndexSeconds);
         out << summaryText;
+
         out << L"\r\nРезультаты последнего поиска\r\n";
         out << L"=========================\r\n\r\n";
         out << L"Найдено в текущей таблице: " << g_app.currentResults.size() << L"\r\n";
         out << L"Файл результатов: " << g_app.resultsPath.wstring() << L"\r\n";
-        out << L"Размер файла результатов: " << fileSizeText(g_app.resultsPath) << L"\r\n\r\n";
-        out << L"Двойной клик по строке: открыть файл.\r\n";
-        out << L"ПКМ по строке: открыть файл, открыть папку, скопировать путь.\r\n";
+        out << L"Размер файла результатов: " << fileSizeText(g_app.resultsPath) << L"\r\n";
+        out << L"Файл summary: " << g_app.indexSummaryFile.wstring() << L" (" << fileSizeText(g_app.indexSummaryFile) << L")\r\n\r\n";
+
+        out << L"Индексаторы / источники\r\n";
+        out << L"======================\r\n";
+        out << L"Общий индекс: data\\file_index.ffdb — текущий общий индекс по выбранной папке.\r\n";
+        out << L"Последний поиск: data\\search_results.tsv — результаты последнего запроса.\r\n";
+        out << L"FindFileIndexer.exe: движок индексации и поиска.\r\n\r\n";
+
+        out << L"Дальше можно расширить схему до нескольких индексов:\r\n";
+        out << L"  data\\indexes\\server.ffdb\r\n";
+        out << L"  data\\indexes\\documents.ffdb\r\n";
+        out << L"  data\\indexes\\all.ffdb\r\n";
+        out << L"и выбирать нужный индекс из этого выпадающего списка.\r\n";
     } else if (tab == 2) {
         out << L"Настройки\r\n";
         out << L"========\r\n\r\n";
@@ -411,7 +433,10 @@ void layout(int w,int h){
 
     int resultsY = searchTab ? cy+scale(58) : cy;
     MoveWindow(g_app.results,cx,resultsY,cw,h-resultsY-statusH-m-scale(8),TRUE);
-    MoveWindow(g_app.pageInfo,cx,cy,cw,h-cy-statusH-m-scale(8),TRUE);
+    MoveWindow(g_app.resultsSourceLabel,cx,cy+scale(6),scale(90),scale(24),TRUE);
+    MoveWindow(g_app.resultsSourceCombo,cx+scale(95),cy,scale(360),eh,TRUE);
+    int pageInfoY = resultsTab ? cy+scale(42) : cy;
+    MoveWindow(g_app.pageInfo,cx,pageInfoY,cw,h-pageInfoY-statusH-m-scale(8),TRUE);
     MoveWindow(g_app.updateInfo,cx,cy+scale(50),cw,h-(cy+scale(50))-statusH-m-scale(8),TRUE);
     MoveWindow(g_app.checkUpdatesButton,cx,cy,scale(190),eh,TRUE);
     MoveWindow(g_app.installUpdateButton,cx+scale(200),cy,scale(190),eh,TRUE);
@@ -419,8 +444,10 @@ void layout(int w,int h){
     MoveWindow(g_app.openUpdaterLogButton,cx+scale(550),cy,scale(180),eh,TRUE);
 
     for(HWND hh:{g_app.queryLabel,g_app.queryEdit,g_app.onlyNameCheck,g_app.caseCheck,g_app.searchButton,g_app.clearButton}) ShowWindow(hh,searchTab?SW_SHOW:SW_HIDE);
-    ShowWindow(g_app.results,(searchTab||resultsTab)?SW_SHOW:SW_HIDE);
-    ShowWindow(g_app.pageInfo,infoTab?SW_SHOW:SW_HIDE);
+    ShowWindow(g_app.results,searchTab?SW_SHOW:SW_HIDE);
+    ShowWindow(g_app.pageInfo,(resultsTab||infoTab)?SW_SHOW:SW_HIDE);
+    ShowWindow(g_app.resultsSourceLabel,resultsTab?SW_SHOW:SW_HIDE);
+    ShowWindow(g_app.resultsSourceCombo,resultsTab?SW_SHOW:SW_HIDE);
     for(HWND hh:{g_app.updateInfo,g_app.checkUpdatesButton,g_app.installUpdateButton,g_app.openFeedButton,g_app.openUpdaterLogButton}) ShowWindow(hh,updateTab?SW_SHOW:SW_HIDE);
 
     MoveWindow(g_app.statusBar,0,h-statusH,w,statusH,TRUE);
@@ -434,6 +461,12 @@ HWND child(const wchar_t* cls,const wchar_t* text,DWORD st,DWORD ex,HWND parent,
 void createControls(HWND hwnd){ g_app.rootGroup=child(L"BUTTON",L"Папка для индексации",WS_CHILD|WS_VISIBLE|BS_GROUPBOX,0,hwnd,0); g_app.rootCombo=child(WC_COMBOBOXW,L"",WS_CHILD|WS_VISIBLE|CBS_DROPDOWN|CBS_AUTOHSCROLL|WS_VSCROLL,WS_EX_CLIENTEDGE,hwnd,IDC_ROOT_COMBO); setText(g_app.rootCombo,L"Введите путь к папке или сетевой путь (пример: \\\\server\\share или \\\\192.168.1.10\\share)"); g_app.browseButton=child(L"BUTTON",L"Обзор...",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,0,hwnd,IDC_BROWSE); g_app.checkRootButton=child(L"BUTTON",L"Проверить",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,0,hwnd,IDC_CHECK_ROOT); g_app.rootStatus=child(L"STATIC",L"Статус: Готово к работе",WS_CHILD|WS_VISIBLE,0,hwnd,0); g_app.indexGroup=child(L"BUTTON",L"Индексация",WS_CHILD|WS_VISIBLE|BS_GROUPBOX,0,hwnd,0); g_app.startIndexButton=child(L"BUTTON",L"Запустить индексацию",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,0,hwnd,IDC_START_INDEX); g_app.stopIndexButton=child(L"BUTTON",L"Остановить",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,0,hwnd,IDC_STOP_INDEX); EnableWindow(g_app.stopIndexButton,FALSE); g_app.tabs=child(WC_TABCONTROLW,L"",WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS,0,hwnd,IDC_TABS); TCITEMW tab{}; tab.mask=TCIF_TEXT; for(auto t:{L"Поиск",L"Результаты",L"Настройки",L"О программе",L"Обновления"}){ tab.pszText=(LPWSTR)t; TabCtrl_InsertItem(g_app.tabs,TabCtrl_GetItemCount(g_app.tabs),&tab);} g_app.queryLabel=child(L"STATIC",L"Что искать:",WS_CHILD|WS_VISIBLE,0,hwnd,0); g_app.queryEdit=child(L"EDIT",L"",WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL,WS_EX_CLIENTEDGE,hwnd,IDC_QUERY); g_app.onlyNameCheck=child(L"BUTTON",L"Только название",WS_CHILD|WS_VISIBLE|BS_AUTOCHECKBOX,0,hwnd,IDC_ONLY_NAME); g_app.caseCheck=child(L"BUTTON",L"С учётом регистра",WS_CHILD|WS_VISIBLE|BS_AUTOCHECKBOX,0,hwnd,IDC_CASE); g_app.searchButton=child(L"BUTTON",L"Найти",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,0,hwnd,IDC_SEARCH); g_app.clearButton=child(L"BUTTON",L"Очистить",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,0,hwnd,IDC_CLEAR); g_app.results=child(WC_LISTVIEWW,L"",WS_CHILD|WS_VISIBLE|LVS_REPORT|LVS_SHOWSELALWAYS,WS_EX_CLIENTEDGE,hwnd,IDC_RESULTS); initColumns();
     g_app.updateInfo=child(L"EDIT",L"",WS_CHILD|ES_MULTILINE|ES_AUTOVSCROLL|ES_READONLY|WS_VSCROLL,WS_EX_CLIENTEDGE,hwnd,IDC_UPDATE_INFO);
     g_app.pageInfo=child(L"EDIT",L"",WS_CHILD|ES_MULTILINE|ES_AUTOVSCROLL|ES_READONLY|WS_VSCROLL,WS_EX_CLIENTEDGE,hwnd,IDC_PAGE_INFO);
+    g_app.resultsSourceLabel=child(L"STATIC",L"Показать:",WS_CHILD,0,hwnd,IDC_RESULTS_SOURCE_LABEL);
+    g_app.resultsSourceCombo=child(WC_COMBOBOXW,L"",WS_CHILD|CBS_DROPDOWNLIST|WS_VSCROLL,WS_EX_CLIENTEDGE,hwnd,IDC_RESULTS_SOURCE_COMBO);
+    SendMessageW(g_app.resultsSourceCombo, CB_ADDSTRING, 0, (LPARAM)L"Общий индекс по всем файлам");
+    SendMessageW(g_app.resultsSourceCombo, CB_ADDSTRING, 0, (LPARAM)L"Последний поиск");
+    SendMessageW(g_app.resultsSourceCombo, CB_ADDSTRING, 0, (LPARAM)L"FindFileIndexer.exe");
+    SendMessageW(g_app.resultsSourceCombo, CB_SETCURSEL, 0, 0);
     g_app.checkUpdatesButton=child(L"BUTTON",L"Проверить обновления",WS_CHILD|BS_PUSHBUTTON,0,hwnd,IDC_CHECK_UPDATES_BTN);
     g_app.installUpdateButton=child(L"BUTTON",L"Скачать и установить",WS_CHILD|BS_PUSHBUTTON,0,hwnd,IDC_INSTALL_UPDATE_BTN);
     g_app.openFeedButton=child(L"BUTTON",L"Открыть feed",WS_CHILD|BS_PUSHBUTTON,0,hwnd,IDC_OPEN_FEED_BTN);
@@ -441,6 +474,6 @@ void createControls(HWND hwnd){ g_app.rootGroup=child(L"BUTTON",L"Папка д�
     EnableWindow(g_app.installUpdateButton,FALSE);
     g_app.statusBar=child(L"STATIC",L"Готово",WS_CHILD|WS_VISIBLE|SS_SUNKEN,0,hwnd,IDC_STATUS); }
 void contextMenu(POINT pt){ int sel=ListView_GetNextItem(g_app.results,-1,LVNI_SELECTED); if(sel<0) return; HMENU m=CreatePopupMenu(); AppendMenuW(m,MF_STRING,IDC_OPEN_FILE,L"Открыть файл"); AppendMenuW(m,MF_STRING,IDC_OPEN_FOLDER,L"Открыть папку"); AppendMenuW(m,MF_SEPARATOR,0,nullptr); AppendMenuW(m,MF_STRING,IDC_COPY_PATH,L"Копировать путь"); TrackPopupMenu(m,TPM_RIGHTBUTTON,pt.x,pt.y,0,g_app.mainWindow,nullptr); DestroyMenu(m); }
-LRESULT CALLBACK wndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){ switch(msg){ case WM_CREATE: g_app.mainWindow=hwnd; g_app.dpi=GetDpiForWindow(hwnd); recreateFont(); createControls(hwnd); loadSettings(); refreshPageInfo(); layout(1200,760); logLine(L"FindFile started"); return 0; case WM_SIZE: layout(LOWORD(lp),HIWORD(lp)); return 0; case WM_DPICHANGED: g_app.dpi=HIWORD(wp); recreateFont(); if(auto r=(RECT*)lp) SetWindowPos(hwnd,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER|SWP_NOACTIVATE); return 0; case WM_COMMAND: switch(LOWORD(wp)){ case IDC_BROWSE: browseRoot(); return 0; case IDC_CHECK_ROOT: checkRootPath(); return 0; case IDC_START_INDEX: runIndexAsync(); return 0; case IDC_STOP_INDEX: stopIndexing(); return 0; case IDC_SEARCH: runSearchAsync(); return 0; case IDC_CLEAR: clearResults(); SetWindowTextW(g_app.queryEdit,L""); return 0; case IDC_CHECK_UPDATES_BTN: checkUpdates(); return 0; case IDC_INSTALL_UPDATE_BTN: installUpdate(); return 0; case IDC_OPEN_FEED_BTN: openUpdateFeed(); return 0; case IDC_OPEN_UPDATER_LOG_BTN: openUpdaterLog(); return 0; case IDC_OPEN_FILE: openSelectedFile(false); return 0; case IDC_OPEN_FOLDER: openSelectedFile(true); return 0; case IDC_COPY_PATH: copySelectedPath(); return 0; } break; case WM_NOTIFY: if(((NMHDR*)lp)->hwndFrom==g_app.tabs && ((NMHDR*)lp)->code==TCN_SELCHANGE){ RECT rc{}; GetClientRect(hwnd,&rc); layout(rc.right-rc.left,rc.bottom-rc.top); if(TabCtrl_GetCurSel(g_app.tabs)==4) refreshUpdateTab(false); else refreshPageInfo(); return 0;} if(((NMHDR*)lp)->hwndFrom==g_app.results){ NMHDR* h=(NMHDR*)lp; if(h->code==NM_DBLCLK){ openSelectedFile(false); return 0;} if(h->code==NM_RCLICK){ POINT pt{}; GetCursorPos(&pt); contextMenu(pt); return 0; }} break; case WM_APP_INDEX_DONE:{ DWORD code=(DWORD)wp; EnableWindow(g_app.startIndexButton,TRUE); EnableWindow(g_app.stopIndexButton,FALSE); if(code==0){ g_app.lastIndexSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_app.indexStartedAt).count(); writeIndexSummary(g_app.lastIndexSeconds); setRootStatus(L"Статус: Индекс создан"); setStatus(L"Индексация завершена за " + durationHuman(g_app.lastIndexSeconds) + L". Введите запрос и нажмите Найти"); refreshPageInfo(); } else { std::wstringstream ss; ss<<L"Индексация завершилась с ошибкой. Код: "<<code<<L". См. logs\\indexer.log"; setStatus(ss.str()); setRootStatus(L"Статус: ошибка индексации"); showError(ss.str()); } return 0;} case WM_APP_SEARCH_DONE:{ DWORD code=(DWORD)wp; EnableWindow(g_app.searchButton,TRUE); if(code==0) loadSearchResults(); else { std::wstringstream ss; ss<<L"Поиск завершился с ошибкой. Код: "<<code<<L". См. logs\\gui.log"; setStatus(ss.str()); showError(ss.str()); } return 0;} case WM_DESTROY: saveSettings(); if(g_app.uiFont) DeleteObject(g_app.uiFont); PostQuitMessage(0); return 0;} return DefWindowProcW(hwnd,msg,wp,lp); }
+LRESULT CALLBACK wndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){ switch(msg){ case WM_CREATE: g_app.mainWindow=hwnd; g_app.dpi=GetDpiForWindow(hwnd); recreateFont(); createControls(hwnd); loadSettings(); refreshPageInfo(); layout(1200,760); logLine(L"FindFile started"); return 0; case WM_SIZE: layout(LOWORD(lp),HIWORD(lp)); return 0; case WM_DPICHANGED: g_app.dpi=HIWORD(wp); recreateFont(); if(auto r=(RECT*)lp) SetWindowPos(hwnd,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER|SWP_NOACTIVATE); return 0; case WM_COMMAND: switch(LOWORD(wp)){ case IDC_BROWSE: browseRoot(); return 0; case IDC_CHECK_ROOT: checkRootPath(); return 0; case IDC_START_INDEX: runIndexAsync(); return 0; case IDC_STOP_INDEX: stopIndexing(); return 0; case IDC_SEARCH: runSearchAsync(); return 0; case IDC_CLEAR: clearResults(); SetWindowTextW(g_app.queryEdit,L""); return 0; case IDC_CHECK_UPDATES_BTN: checkUpdates(); return 0; case IDC_INSTALL_UPDATE_BTN: installUpdate(); return 0; case IDC_OPEN_FEED_BTN: openUpdateFeed(); return 0; case IDC_OPEN_UPDATER_LOG_BTN: openUpdaterLog(); return 0; case IDC_RESULTS_SOURCE_COMBO: if (HIWORD(wp)==CBN_SELCHANGE) refreshPageInfo(); return 0; case IDC_OPEN_FILE: openSelectedFile(false); return 0; case IDC_OPEN_FOLDER: openSelectedFile(true); return 0; case IDC_COPY_PATH: copySelectedPath(); return 0; } break; case WM_NOTIFY: if(((NMHDR*)lp)->hwndFrom==g_app.tabs && ((NMHDR*)lp)->code==TCN_SELCHANGE){ RECT rc{}; GetClientRect(hwnd,&rc); layout(rc.right-rc.left,rc.bottom-rc.top); if(TabCtrl_GetCurSel(g_app.tabs)==4) refreshUpdateTab(false); else refreshPageInfo(); return 0;} if(((NMHDR*)lp)->hwndFrom==g_app.results){ NMHDR* h=(NMHDR*)lp; if(h->code==NM_DBLCLK){ openSelectedFile(false); return 0;} if(h->code==NM_RCLICK){ POINT pt{}; GetCursorPos(&pt); contextMenu(pt); return 0; }} break; case WM_APP_INDEX_DONE:{ DWORD code=(DWORD)wp; EnableWindow(g_app.startIndexButton,TRUE); EnableWindow(g_app.stopIndexButton,FALSE); if(code==0){ g_app.lastIndexSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_app.indexStartedAt).count(); writeIndexSummary(g_app.lastIndexSeconds); setRootStatus(L"Статус: Индекс создан"); setStatus(L"Индексация завершена за " + durationHuman(g_app.lastIndexSeconds) + L". Введите запрос и нажмите Найти"); refreshPageInfo(); } else { std::wstringstream ss; ss<<L"Индексация завершилась с ошибкой. Код: "<<code<<L". См. logs\\indexer.log"; setStatus(ss.str()); setRootStatus(L"Статус: ошибка индексации"); showError(ss.str()); } return 0;} case WM_APP_SEARCH_DONE:{ DWORD code=(DWORD)wp; EnableWindow(g_app.searchButton,TRUE); if(code==0) loadSearchResults(); else { std::wstringstream ss; ss<<L"Поиск завершился с ошибкой. Код: "<<code<<L". См. logs\\gui.log"; setStatus(ss.str()); showError(ss.str()); } return 0;} case WM_DESTROY: saveSettings(); if(g_app.uiFont) DeleteObject(g_app.uiFont); PostQuitMessage(0); return 0;} return DefWindowProcW(hwnd,msg,wp,lp); }
 }
 int WINAPI wWinMain(HINSTANCE inst,HINSTANCE, PWSTR, int show){ CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED); INITCOMMONCONTROLSEX icc{sizeof(icc),ICC_LISTVIEW_CLASSES|ICC_TAB_CLASSES|ICC_STANDARD_CLASSES}; InitCommonControlsEx(&icc); g_app.instance=inst; g_app.appDir=exeDir(); ensureDirs(); WNDCLASSEXW wc{}; wc.cbSize=sizeof(wc); wc.hInstance=inst; wc.lpszClassName=L"FindFileNativeWindow"; wc.lpfnWndProc=wndProc; wc.hCursor=LoadCursorW(nullptr,IDC_ARROW); wc.hIcon=LoadIconW(nullptr,IDI_APPLICATION); wc.hIconSm=LoadIconW(nullptr,IDI_APPLICATION); wc.hbrBackground=(HBRUSH)(COLOR_WINDOW+1); RegisterClassExW(&wc); HWND hwnd=CreateWindowExW(0,wc.lpszClassName,L"FindFile",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,CW_USEDEFAULT,CW_USEDEFAULT,1280,800,nullptr,nullptr,inst,nullptr); if(!hwnd){ CoUninitialize(); return 1;} ShowWindow(hwnd,show); UpdateWindow(hwnd); MSG msg{}; while(GetMessageW(&msg,nullptr,0,0)>0){ TranslateMessage(&msg); DispatchMessageW(&msg);} CoUninitialize(); return (int)msg.wParam; }
