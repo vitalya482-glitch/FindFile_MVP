@@ -16,7 +16,12 @@ target_compile_definitions(FindFile PRIVATE
 )
 
 if(MSVC)
-    target_compile_options(FindFile PRIVATE /W4 /permissive- /EHsc)
+    target_compile_options(FindFile PRIVATE
+        /W4
+        /permissive-
+        /EHsc
+        /utf-8
+    )
 endif()
 
 target_link_libraries(FindFile PRIVATE
