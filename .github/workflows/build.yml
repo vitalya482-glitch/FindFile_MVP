@@ -28,7 +28,7 @@ env:
 
 jobs:
   build-windows:
-    name: Build FindFile.exe + FindFileIndexer.exe
+    name: Build native FindFile.exe + FindFileIndexer.exe
     runs-on: windows-latest
 
     steps:
@@ -53,7 +53,7 @@ jobs:
           }
 
           if ($baseVersion -notmatch '^\d+\.\d+\.\d+$') {
-            throw "VERSION must be in format 0.1.1, current value: $baseVersion"
+            throw "VERSION must be in format 0.2.0, current value: $baseVersion"
           }
 
           $devVersion = "$baseVersion.${{ github.run_number }}"
@@ -82,10 +82,11 @@ jobs:
           "PUBLISH_DEV_LATEST=$publishDevLatest" | Out-File -FilePath $env:GITHUB_ENV -Append
           Write-Host "Publish dev-latest: $publishDevLatest"
 
-      - name: Set up .NET 8
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
+      - name: Configure native C++ GUI
+        run: cmake -S desktop/FindFile.Native -B build-gui -A x64
+
+      - name: Build native C++ GUI
+        run: cmake --build build-gui --config Release
 
       - name: Configure C++ indexer
         run: cmake -S indexer -B build-indexer -A x64
@@ -93,16 +94,36 @@ jobs:
       - name: Build C++ indexer
         run: cmake --build build-indexer --config Release
 
-      - name: Publish WPF desktop app
-        run: >-
-          dotnet publish desktop/FindFile.Desktop/FindFile.Desktop.csproj
-          -c Release
-          -r win-x64
-          --self-contained true
-          /p:PublishSingleFile=true
-          /p:IncludeNativeLibrariesForSelfExtract=true
-          /p:EnableCompressionInSingleFile=true
-          /p:PublishDir=${{ github.workspace }}/publish/FindFile-Windows/
+      - name: Prepare publish folder
+        shell: pwsh
+        run: |
+          $publishDir = Join-Path $env:GITHUB_WORKSPACE "publish/FindFile-Windows"
+          if (Test-Path $publishDir) {
+            Remove-Item $publishDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $publishDir "data") | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $publishDir "logs") | Out-Null
+
+      - name: Copy native GUI
+        shell: pwsh
+        run: |
+          $publishDir = Join-Path $env:GITHUB_WORKSPACE "publish/FindFile-Windows"
+          $guiCandidates = @(
+            (Join-Path $env:GITHUB_WORKSPACE "build-gui/Release/FindFile.exe"),
+            (Join-Path $env:GITHUB_WORKSPACE "build-gui/FindFile.exe")
+          )
+
+          $guiPath = $guiCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+          if (-not $guiPath) {
+            Write-Host "GUI candidates checked:"
+            $guiCandidates | ForEach-Object { Write-Host " - $_" }
+            throw "FindFile.exe not found after native GUI build."
+          }
+
+          Copy-Item $guiPath (Join-Path $publishDir "FindFile.exe") -Force
+          Write-Host "Copied native GUI: $guiPath"
 
       - name: Copy indexer next to app
         shell: pwsh
@@ -171,13 +192,10 @@ jobs:
 
           Write-Host "LVKUpdater copied to package."
 
-      - name: Add default folders and update config
+      - name: Add update config and readme
         shell: pwsh
         run: |
           $publishDir = Join-Path $env:GITHUB_WORKSPACE "publish/FindFile-Windows"
-
-          New-Item -ItemType Directory -Force -Path (Join-Path $publishDir "data") | Out-Null
-          New-Item -ItemType Directory -Force -Path (Join-Path $publishDir "logs") | Out-Null
 
           $appUpdate = [ordered]@{
             schemaVersion = 1
@@ -193,12 +211,12 @@ jobs:
           Set-Content -Path (Join-Path $publishDir "app.update.json") -Value $appUpdateJson -Encoding UTF8
 
           $readme = @"
-          FindFile Windows build
+          FindFile native Windows build
 
           Version: $env:CLEAN_VERSION
 
           Files:
-          - FindFile.exe: WPF/XAML desktop interface
+          - FindFile.exe: native C++ WinAPI interface
           - FindFileIndexer.exe: C++ indexing engine
           - LVKUpdater.exe: update installer
           - app.update.json: local update config
@@ -275,7 +293,7 @@ jobs:
           tag_name: ${{ env.DEV_RELEASE_TAG }}
           name: FindFile dev-latest
           body: |
-            FindFile automatic dev build.
+            FindFile automatic native C++ dev build.
 
             Version:
             ${{ env.CLEAN_VERSION }}
@@ -322,7 +340,7 @@ jobs:
               size = [int64]$env:PACKAGE_SIZE
             }
             notes = @(
-              "Автоматическая dev-сборка FindFile.",
+              "Автоматическая native C++ dev-сборка FindFile.",
               "Commit: ${{ github.sha }}"
             )
           }
@@ -335,5 +353,5 @@ jobs:
           git config user.email "github-actions@github.com"
 
           git add "${{ env.UPDATE_FEED_MANIFEST_PATH }}"
-          git commit -m "Update FindFile dev manifest to $env:CLEAN_VERSION" || echo "No changes to commit"
+          git commit -m "Update FindFile native dev manifest to $env:CLEAN_VERSION" || echo "No changes to commit"
           git push origin "${{ env.UPDATE_FEED_BRANCH }}"
