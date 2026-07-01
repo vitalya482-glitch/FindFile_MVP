@@ -266,6 +266,8 @@ jobs:
             Write-Host "No old dev-latest release found. Continue."
           }
 
+          exit 0
+
       - name: Create dev-latest release
         if: ${{ env.PUBLISH_DEV_LATEST == 'true' }}
         uses: softprops/action-gh-release@v2
