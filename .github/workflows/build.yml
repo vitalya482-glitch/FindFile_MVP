@@ -8,11 +8,6 @@ on:
     branches: [ main ]
 
   workflow_dispatch:
-    inputs:
-      release_notes:
-        description: "Release notes for dev-latest manifest and GitHub release."
-        required: false
-        default: "FindFile development update."
 
 permissions:
   contents: write
@@ -22,12 +17,14 @@ env:
   APP_NAME: FindFile
   MAIN_EXE: FindFile.exe
   PACKAGE_NAME: FindFile-win-x64.zip
-  DEV_RELEASE_TAG: dev-latest
+
   LVK_UPDATER_VERSION: v0.1.0
   UPDATE_FEED_REPO: vitalya482-glitch/LVK-Update-Feed
   UPDATE_FEED_BRANCH: main
   UPDATE_FEED_MANIFEST_PATH: manifests/findfile.json
   UPDATE_MANIFEST_URL: https://raw.githubusercontent.com/vitalya482-glitch/LVK-Update-Feed/main/manifests/findfile.json
+
+  DEV_RELEASE_TAG: dev-latest
 
 jobs:
   build-windows:
@@ -38,7 +35,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Read base version and create build version
+      - name: Read version from VERSION file
         shell: pwsh
         run: |
           if (-not (Test-Path "VERSION")) {
@@ -56,19 +53,18 @@ jobs:
           }
 
           if ($baseVersion -notmatch '^\d+\.\d+\.\d+$') {
-            throw "VERSION must be in format 0.1.0, current value: $baseVersion"
+            throw "VERSION must be in format 0.1.1, current value: $baseVersion"
           }
 
-          $buildVersion = "$baseVersion.${{ github.run_number }}"
-          $releaseTag = "${{ env.DEV_RELEASE_TAG }}"
+          $devVersion = "$baseVersion.${{ github.run_number }}"
 
           "BASE_VERSION=$baseVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "BUILD_VERSION=$buildVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "RELEASE_TAG=$releaseTag" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CLEAN_VERSION=$devVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RELEASE_VERSION=${{ env.DEV_RELEASE_TAG }}" | Out-File -FilePath $env:GITHUB_ENV -Append
 
           Write-Host "Base version: $baseVersion"
-          Write-Host "Build version: $buildVersion"
-          Write-Host "Release tag: $releaseTag"
+          Write-Host "Dev version: $devVersion"
+          Write-Host "Release tag: ${{ env.DEV_RELEASE_TAG }}"
 
       - name: Set publish mode
         shell: pwsh
@@ -143,6 +139,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
 
           $updaterExtract = Join-Path $toolsDir "LVKUpdater"
+
           if (Test-Path $updaterExtract) {
             Remove-Item $updaterExtract -Recurse -Force
           }
@@ -186,8 +183,8 @@ jobs:
             schemaVersion = 1
             appId = "${{ env.APP_ID }}"
             name = "${{ env.APP_NAME }}"
-            currentVersion = "$env:BUILD_VERSION"
-            channel = "dev"
+            currentVersion = "$env:CLEAN_VERSION"
+            channel = "stable"
             mainExe = "${{ env.MAIN_EXE }}"
             manifestUrl = "${{ env.UPDATE_MANIFEST_URL }}"
           }
@@ -198,8 +195,7 @@ jobs:
           $readme = @"
           FindFile Windows build
 
-          Version: $env:BUILD_VERSION
-          Channel: dev
+          Version: $env:CLEAN_VERSION
 
           Files:
           - FindFile.exe: WPF/XAML desktop interface
@@ -254,24 +250,36 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete "${{ env.DEV_RELEASE_TAG }}" --repo "${{ github.repository }}" --yes --cleanup-tag 2>$null
-          Write-Host "Old dev-latest release deleted if it existed."
+          gh release view "${{ env.DEV_RELEASE_TAG }}" --repo "${{ github.repository }}" *> $null
+
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Old dev-latest release found. Deleting..."
+            gh release delete "${{ env.DEV_RELEASE_TAG }}" --repo "${{ github.repository }}" --yes --cleanup-tag
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to delete old dev-latest release."
+            }
+
+            Write-Host "Old dev-latest release deleted."
+          }
+          else {
+            Write-Host "No old dev-latest release found. Continue."
+          }
 
       - name: Create dev-latest release
         if: ${{ env.PUBLISH_DEV_LATEST == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.DEV_RELEASE_TAG }}
-          name: FindFile dev-latest (${{ env.BUILD_VERSION }})
+          name: FindFile dev-latest
           body: |
-            FindFile development build ${{ env.BUILD_VERSION }}
+            FindFile automatic dev build.
 
-            Source:
-            - Commit: ${{ github.sha }}
-            - Run number: ${{ github.run_number }}
+            Version:
+            ${{ env.CLEAN_VERSION }}
 
-            Notes:
-            ${{ github.event.inputs.release_notes || 'FindFile development update.' }}
+            Commit:
+            ${{ github.sha }}
 
             Package:
             - FindFile-win-x64.zip
@@ -297,17 +305,12 @@ jobs:
           $releaseDate = (Get-Date).ToString("yyyy-MM-dd")
           $packageUrl = "https://github.com/${{ github.repository }}/releases/download/${{ env.DEV_RELEASE_TAG }}/${{ env.PACKAGE_NAME }}"
 
-          $notesText = "${{ github.event.inputs.release_notes }}"
-          if ([string]::IsNullOrWhiteSpace($notesText)) {
-            $notesText = "FindFile development update from commit ${{ github.sha }}."
-          }
-
           $manifest = [ordered]@{
             schemaVersion = 1
             appId = "${{ env.APP_ID }}"
             name = "${{ env.APP_NAME }}"
-            latestVersion = "$env:BUILD_VERSION"
-            channel = "dev"
+            latestVersion = "$env:CLEAN_VERSION"
+            channel = "stable"
             mandatory = $false
             releaseDate = $releaseDate
             mainExe = "${{ env.MAIN_EXE }}"
@@ -316,7 +319,10 @@ jobs:
               sha256 = "$env:PACKAGE_SHA256"
               size = [int64]$env:PACKAGE_SIZE
             }
-            notes = @($notesText)
+            notes = @(
+              "Автоматическая dev-сборка FindFile.",
+              "Commit: ${{ github.sha }}"
+            )
           }
 
           $manifestJson = $manifest | ConvertTo-Json -Depth 10
@@ -327,5 +333,5 @@ jobs:
           git config user.email "github-actions@github.com"
 
           git add "${{ env.UPDATE_FEED_MANIFEST_PATH }}"
-          git commit -m "Update FindFile dev manifest to $env:BUILD_VERSION" || echo "No changes to commit"
+          git commit -m "Update FindFile dev manifest to $env:CLEAN_VERSION" || echo "No changes to commit"
           git push origin "${{ env.UPDATE_FEED_BRANCH }}"
