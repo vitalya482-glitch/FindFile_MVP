@@ -18,7 +18,7 @@ env:
   MAIN_EXE: FindFile.exe
   PACKAGE_NAME: FindFile-win-x64.zip
 
-  LVK_UPDATER_VERSION: v0.1.0
+  LVK_UPDATER_VERSION: v0.1.1
   UPDATE_FEED_REPO: vitalya482-glitch/LVK-Update-Feed
   UPDATE_FEED_BRANCH: main
   UPDATE_FEED_MANIFEST_PATH: manifests/findfile.json
