@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <ctime>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -108,12 +109,22 @@ std::wstring buildFolderPath(
 std::wstring fileTimeText(std::uint64_t unixSeconds) {
     if (unixSeconds == 0) return {};
 
+    // Защита от битых/неожиданных timestamp-значений.
+    // Если сюда попадёт не Unix seconds, а, например, FILETIME ticks,
+    // MSVC runtime может аварийно завершить процесс на localtime_s.
+    constexpr std::uint64_t maxReasonableUnixTime = 4102444800ull; // 2100-01-01
+    if (unixSeconds > maxReasonableUnixTime) return {};
+
     std::time_t t = static_cast<std::time_t>(unixSeconds);
     std::tm tm{};
-    localtime_s(&tm, &t);
+    if (localtime_s(&tm, &t) != 0) {
+        return {};
+    }
 
     wchar_t buffer[64]{};
-    wcsftime(buffer, std::size(buffer), L"%Y-%m-%d %H:%M", &tm);
+    if (wcsftime(buffer, std::size(buffer), L"%Y-%m-%d %H:%M", &tm) == 0) {
+        return {};
+    }
     return buffer;
 }
 
@@ -164,7 +175,21 @@ bool matches(const std::wstring& name, const std::wstring& fullPath, const AppCo
     return false;
 }
 
+void appendSearchLog(const AppConfig& config, const std::string& message) {
+    if (config.logPath.empty()) return;
+    try {
+        std::filesystem::create_directories(config.logPath.parent_path());
+        std::ofstream log(config.logPath, std::ios::binary | std::ios::app);
+        if (log.is_open()) {
+            log << "[search] " << message << "\n";
+        }
+    } catch (...) {
+        // Лог не должен валить поиск.
+    }
+}
+
 int runSearch(const AppConfig& config) {
+    appendSearchLog(config, "start");
     std::ifstream stream(config.inputIndexPath, std::ios::binary);
     if (!stream.is_open()) {
         throw std::runtime_error("Cannot open index file");
@@ -243,6 +268,7 @@ int runSearch(const AppConfig& config) {
         if (std::string(end.magic, end.magic + 4) != "END1") break;
     }
 
+    appendSearchLog(config, "done, results=" + std::to_string(written));
     std::cout << "{\"results\":" << written << "}" << std::endl;
     return 0;
 }
@@ -259,7 +285,17 @@ int IndexerApplication::run(int argc, wchar_t* argv[]) {
         return engine.run();
     }
     case AppCommand::Search:
-        return runSearch(config);
+        try {
+            return runSearch(config);
+        } catch (const std::exception& ex) {
+            appendSearchLog(config, std::string("error: ") + ex.what());
+            std::cerr << "Search error: " << ex.what() << std::endl;
+            return 3;
+        } catch (...) {
+            appendSearchLog(config, "unknown error");
+            std::cerr << "Search unknown error" << std::endl;
+            return 3;
+        }
     case AppCommand::Pause: {
         findfile::ipc::SharedMemoryControl control(config.controlMemoryName(), false);
         control.writeCommand(findfile::ipc::ControlCommand::Pause);
